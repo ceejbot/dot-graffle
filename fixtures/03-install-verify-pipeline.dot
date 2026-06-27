@@ -1,0 +1,98 @@
+// 03 — Install / fetch / verify pipeline: end-to-end data flow when a consumer
+// installs a package. Read left to right. The defining property: verification is
+// layered — content, then provenance, then transparency, then witnesses — and
+// installation NEVER executes package code.
+// Sources: api.md, manifests.md, signing.md, transparency.md,
+// witness-consumer-pinning.md.
+digraph boltzmann_install {
+    rankdir=LR;
+    labelloc="t";
+    fontname="Helvetica";
+    fontsize=20;
+    label="Boltzmann — install / fetch / verify pipeline\ngreen = a verification gate · each gate can reject";
+    bgcolor="white";
+    nodesep=0.35;
+    ranksep=0.7;
+    node [fontname="Helvetica", fontsize=10, style="filled", shape=box, fillcolor="#dbeafe"];
+    edge [fontname="Helvetica", fontsize=9, color="#475569"];
+
+    // ---- Discover -----------------------------------------------------------
+    subgraph cluster_discover {
+        label="① discover";
+        style="rounded,filled"; fillcolor="#eff6ff"; color="#60a5fa";
+        search [label="search\nGET /v1/search?q="];
+        info   [label="rollup manifest\nGET /v1/packages/<id>", shape=note, fillcolor="#fef9c3"];
+        review [label="review diffs\nGET …/diffs/a..b\n(human signal layer)"];
+        search -> info -> review;
+    }
+
+    // ---- Resolve ------------------------------------------------------------
+    subgraph cluster_resolve {
+        label="② resolve dependencies";
+        style="rounded,filled"; fillcolor="#eff6ff"; color="#60a5fa";
+        index  [label="version index\nyanked? · content_root\ndep pins (link_hash each)"];
+        solve  [label="SAT resolve\n→ lockfile (pin by link_hash)"];
+        index -> solve;
+    }
+
+    // ---- Download -----------------------------------------------------------
+    download [label="③ download\nGET /v1/archives/{link_hash}\nETag · X-Content-Root · X-Manifest-Hash", shape=note, fillcolor="#fef9c3"];
+
+    // ---- Verify: content ----------------------------------------------------
+    subgraph cluster_content {
+        label="④ verify content";
+        style="rounded,filled"; fillcolor="#ecfdf5"; color="#34d399";
+        unpack [label="unpack .ent\nverify manifest_hash", fillcolor="#a7f3d0"];
+        recon  [label="recompute file-tree Merkle\ncontent_root must match", shape=octagon, fillcolor="#86efac"];
+        unpack -> recon;
+    }
+
+    // ---- Verify: provenance -------------------------------------------------
+    subgraph cluster_prov {
+        label="⑤ verify provenance";
+        style="rounded,filled"; fillcolor="#ecfdf5"; color="#34d399";
+        fetchlink [label="fetch Publish sigchain link", shape=note, fillcolor="#fef08a"];
+        hostsig   [label="verify host Ed25519 sig\n(content_root + manifest_hash\nbound to this pkg + actor)", fillcolor="#86efac"];
+        fetchlink -> hostsig;
+    }
+
+    // ---- Verify: transparency -----------------------------------------------
+    subgraph cluster_trans {
+        label="⑥ verify transparency";
+        style="rounded,filled"; fillcolor="#ecfdf5"; color="#34d399";
+        smr   [label="fetch SignedMapRoot\n+ map lookup proof", shape=note, fillcolor="#fef08a"];
+        incl  [label="verify map inclusion\n+ revision binding\n+ host key active @ timestamp", fillcolor="#86efac"];
+        smr -> incl;
+    }
+
+    // ---- Verify: witnesses --------------------------------------------------
+    subgraph cluster_witness {
+        label="⑦ verify witnesses (M-of-N)";
+        style="rounded,filled"; fillcolor="#f5f3ff"; color="#a78bfa";
+        keystone [label="keystone root manifest\n(pinned witness set + M)", shape=note, fillcolor="#ddd6fe"];
+        cosig    [label="fetch checkpoint + cosignatures\nverify M-of-N over distinct\npinned witness identities", fillcolor="#c4b5fd"];
+        classify [label="classify checkpoint:\nConforming / Initialization /\nEquivocating / Stale", shape=diamond, fillcolor="#c4b5fd"];
+        keystone -> cosig -> classify;
+    }
+
+    // ---- Ratchet + install --------------------------------------------------
+    ratchet [label="⑧ ratchet HostTransparencyState\n(monotonic; anti-rollback)", shape=cylinder, fillcolor="#e5e7eb"];
+    install [label="⑨ install to local cache\n★ NO SCRIPT EXECUTION ★\n(install scripts banned by format)", fillcolor="#bbf7d0", penwidth=2];
+
+    // ---- Spine --------------------------------------------------------------
+    review   -> index    [penwidth=2];
+    solve    -> download [penwidth=2, label="per dependency"];
+    download -> unpack   [penwidth=2];
+    recon    -> fetchlink[penwidth=2];
+    hostsig  -> smr      [penwidth=2];
+    incl     -> cosig    [penwidth=2];
+    classify -> ratchet  [penwidth=2, color="#059669", label="accept"];
+    ratchet  -> install  [penwidth=2];
+
+    // rejection sink
+    reject [label="REJECT\n(equivocation / staleness /\nhash mismatch / bad signature)", shape=octagon, fillcolor="#fecaca", color="#dc2626"];
+    recon    -> reject [color="#dc2626", style=dashed];
+    hostsig  -> reject [color="#dc2626", style=dashed];
+    incl     -> reject [color="#dc2626", style=dashed];
+    classify -> reject [color="#dc2626", style=dashed, label="Equivocating / Stale"];
+}

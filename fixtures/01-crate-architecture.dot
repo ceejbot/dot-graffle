@@ -1,0 +1,78 @@
+// 01 — Crate architecture: the Rust workspace and its dependency edges.
+// Level 1. Arrows point from a crate to the crate it depends on (depends-on).
+// Double-bordered crates produce a binary. Dashed edges are dev/test-only.
+// Edges verified against each crate's Cargo.toml (path dependencies).
+digraph boltzmann_crates {
+    rankdir=TB;
+    labelloc="t";
+    fontname="Helvetica";
+    fontsize=20;
+    label="Boltzmann — crate architecture\n(arrow = depends on · double border = produces a binary · dashed = dev-only)";
+    bgcolor="white";
+    nodesep=0.5;
+    ranksep=0.9;
+    node [fontname="Helvetica", fontsize=11, style="filled", shape=box];
+    edge [fontname="Helvetica", fontsize=9, color="#475569"];
+
+    // ---- Binaries (top rank) ------------------------------------------------
+    subgraph cluster_bins {
+        label="Binaries";
+        style="rounded,filled"; fillcolor="#eff6ff"; color="#60a5fa";
+        cli     [label="boltzmann-cli\n→ binary: boltzmann\nuser CLI: publish/install/search", fillcolor="#bfdbfe", peripheries=2];
+        server  [label="boltzmann-server\nregistry: API · DB · cadence", fillcolor="#bfdbfe", peripheries=2];
+        keys    [label="boltzmann-keys\noperator: host keys · sigchain ops", fillcolor="#bfdbfe", peripheries=2];
+        witness [label="boltzmann-witness\nwitness daemon: cosign · gossip", fillcolor="#bfdbfe", peripheries=2];
+    }
+
+    // ---- Library crates -----------------------------------------------------
+    verifier [label="boltzmann-verifier\nstateless client verification:\nsigchains · host identity · proofs", fillcolor="#a7f3d0"];
+    client   [label="boltzmann-client\nGENERATED HTTP client (progenitor)\ndo not hand-edit", fillcolor="#fef9c3"];
+
+    // ---- Foundational crates (bottom rank) ----------------------------------
+    subgraph cluster_foundation {
+        label="Foundational (no workspace deps)";
+        style="rounded,filled"; fillcolor="#f0fdf4"; color="#4ade80";
+        core    [label="boltzmann-core\ncanonical types + codecs:\nsigchain · host_sigchain · transparency\nmanifests · algorithm · keyfile", fillcolor="#86efac"];
+        archive [label="boltzmann-archive\n.ent format: Merkle · zstd\npath validation · proofs", fillcolor="#86efac"];
+    }
+
+    // ---- OpenAPI support ----------------------------------------------------
+    subgraph cluster_openapi {
+        label="In-house OpenAPI generator";
+        style="rounded,filled"; fillcolor="#fdf4ff"; color="#e879f9";
+        openapi  [label="axum-openapi\nOpenAPI 3.1 from axum handlers", fillcolor="#f5d0fe"];
+        oamacros [label="axum-openapi-macros\nproc-macros", fillcolor="#f5d0fe"];
+    }
+
+    // ---- Dev-only harness ---------------------------------------------------
+    harness [label="boltzmann-test-harness\nlive-HTTP fixtures (dev only):\nserver + witness + clock isolation", fillcolor="#e5e7eb", style="filled,dashed"];
+
+    // ---- Dependency edges (depends-on) --------------------------------------
+    cli -> archive;
+    cli -> client;
+    cli -> core;
+    cli -> verifier;
+
+    server -> openapi;
+    server -> archive;
+    server -> core;
+    server -> verifier;
+
+    keys -> core;
+    keys -> verifier;
+
+    witness -> core;
+    witness -> verifier;
+
+    verifier -> core;
+    openapi -> oamacros;
+
+    // dev/test-only edges
+    harness -> core    [style=dashed];
+    harness -> server  [style=dashed];
+    harness -> verifier[style=dashed];
+    harness -> witness [style=dashed];
+
+    // keep foundational crates below the libraries that use them
+    { rank=same; verifier; client; }
+}

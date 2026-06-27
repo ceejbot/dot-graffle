@@ -1,0 +1,97 @@
+// 00 — System context: actors, binaries, and the major flows between them.
+// Level 0 of the diagram set. Start here. Each numbered flow is narrated in
+// README.md. Sources: README.md, docs/design/api.md, docs/design/witness-regime.md,
+// docs/design/transparency.md, docs/design/sigchain.md.
+digraph boltzmann_system_context {
+    rankdir=LR;
+    labelloc="t";
+    fontname="Helvetica";
+    fontsize=20;
+    label="Boltzmann — system context\nfederated, supply-chain-hardened package registry";
+    bgcolor="white";
+    nodesep=0.4;
+    ranksep=1.1;
+    node [fontname="Helvetica", fontsize=11, style="rounded,filled", shape=box];
+    edge [fontname="Helvetica", fontsize=9];
+
+    // ---- Publisher domain ---------------------------------------------------
+    subgraph cluster_publisher {
+        label="Publisher (package author)";
+        style="rounded,filled"; fillcolor="#f1f5f9"; color="#94a3b8";
+        author    [label="Human author", fillcolor="#dbeafe"];
+        passkey   [label="Passkey authenticator\n(Touch ID / Hello / hardware key)", shape=house, fillcolor="#fdba74"];
+        cli_pub   [label="boltzmann (CLI)\npack · publish · yank", fillcolor="#bfdbfe", penwidth=2];
+        author -> cli_pub [label="drives"];
+        author -> passkey [style=dashed, label="WebAuthn ceremony"];
+    }
+
+    // ---- Operator domain ----------------------------------------------------
+    subgraph cluster_operator {
+        label="Registry operator";
+        style="rounded,filled"; fillcolor="#f1f5f9"; color="#94a3b8";
+        keys      [label="boltzmann-keys (CLI)\ninit-host · rotate-key · retire\ngenerate-txt · first-checkpoint", fillcolor="#bfdbfe", penwidth=2];
+        hostkey   [label="Host Ed25519 key\nBOLTZMANN_HOST_KEY_PATH", shape=house, fillcolor="#fdba74"];
+        keys -> hostkey [style=dashed, label="manages"];
+    }
+
+    // ---- The home host (registry server) ------------------------------------
+    subgraph cluster_host {
+        label="Home host  (the registry that owns a DNS name)";
+        style="rounded,filled"; fillcolor="#ecfdf5"; color="#34d399";
+        server    [label="boltzmann-server\nHTTP API + admission + diff", fillcolor="#a7f3d0", penwidth=2];
+        cadence   [label="transparency cadence loop\nsigns map roots + checkpoints", fillcolor="#a7f3d0"];
+        db        [label="PostgreSQL\nsigchains · versions · files\nmap roots · cosignatures", shape=cylinder, fillcolor="#e5e7eb"];
+        server -> db [dir=both, color="#475569"];
+        cadence -> db [dir=both, color="#475569"];
+    }
+
+    // ---- Witness federation -------------------------------------------------
+    subgraph cluster_witness {
+        label="Witness federation (independent operators)";
+        style="rounded,filled"; fillcolor="#faf5ff"; color="#c084fc";
+        w1 [label="boltzmann-witness #1\nobserve · verify · cosign · serve", fillcolor="#ddd6fe", penwidth=2];
+        w2 [label="boltzmann-witness #2", fillcolor="#ddd6fe"];
+        w3 [label="boltzmann-witness #3", fillcolor="#ddd6fe"];
+        w1 -> w2 [dir=both, color="#7c3aed", label="gossip", constraint=false];
+        w2 -> w3 [dir=both, color="#7c3aed", constraint=false];
+        w1 -> w3 [dir=both, color="#7c3aed", style=dashed, constraint=false];
+    }
+
+    // ---- Other external parties --------------------------------------------
+    dns    [label="DNS\n_boltzmann.<host>  TXT\nv · root · sig · iat · exp", shape=note, fillcolor="#fde68a"];
+    mirror [label="Mirror\nre-serves sigchains + roots\n(a mirror is one signature\nfrom being a witness)", fillcolor="#fef9c3"];
+
+    // ---- Consumer domain ----------------------------------------------------
+    subgraph cluster_consumer {
+        label="Consumer (package installer)";
+        style="rounded,filled"; fillcolor="#f1f5f9"; color="#94a3b8";
+        cli_con  [label="boltzmann (CLI)\nsearch · diff · install · verify", fillcolor="#bfdbfe", penwidth=2];
+        keystone [label="keystone root manifest\n(shipped in the binary)\nnames the witness set + quorum", shape=note, fillcolor="#fef9c3"];
+        pins     [label="pinned state\nhost checkpoint (ratcheted)\nM-of-N witness set", shape=cylinder, fillcolor="#e5e7eb"];
+        cli_con -> keystone [style=dashed, label="trusts"];
+        cli_con -> pins [dir=both, color="#475569"];
+    }
+
+    // ---- Cross-domain flows (numbered; narrated in README) ------------------
+    cli_pub -> server   [label="1  publish (2-phase)\nPOST initiate/confirm", color="#1d4ed8", penwidth=2];
+    passkey -> server   [label="2  WebAuthn assertion\n(fresh user proof)", color="#dc2626", style=dashed];
+    keys    -> server   [label="3  host sigchain ops\nInitHost · RotateKey", color="#1d4ed8"];
+    keys    -> dns      [label="4  publish TXT record", color="#1d4ed8"];
+    hostkey -> server   [label="5  signs links + roots", color="#dc2626", style=dashed];
+
+    cadence -> w1       [label="6  fetch checkpoint\n(map root + log head)", color="#475569"];
+    cadence -> mirror   [label="7  serve current root", color="#475569"];
+    w1 -> server        [label="8  POST cosignature\n(W-C ingest)", color="#7c3aed", penwidth=2];
+
+    mirror -> server    [label="9  sync sigchains", dir=both, color="#475569"];
+
+    cli_con -> server   [label="10  fetch pkg + proofs", dir=both, color="#475569"];
+    cli_con -> mirror   [label="11  fetch (untrusted)", dir=both, color="#475569", style=dashed];
+    dns     -> cli_con  [label="12  verify host identity", color="#059669"];
+    w1 -> cli_con       [label="13  cosignatures\n(verify M-of-N offline)", color="#059669"];
+
+    // legend pointer
+    legend [shape=plaintext, fillcolor="white", style="",
+            label="Flows 1–5 publish & identity · 6–9 transparency + witnessing · 10–13 fetch & verify\nSee 02 / 03 for the publish and install pipelines; 04 for the signature tree."];
+    { rank=sink; legend; }
+}

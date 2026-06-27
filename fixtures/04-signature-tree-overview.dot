@@ -1,0 +1,87 @@
+// 04 — THE SIGNATURE TREE (overview): the layered tree of signed structures a
+// Boltzmann registry maintains, and how each layer anchors the next.
+// This is the map; 05–08 are the territory (each block explodes into its own
+// diagram). Read top (root of trust) to bottom (what a consumer checks).
+//
+// Edge legend:
+//   red    "signs"        — an Ed25519 (host or witness) signature over bytes
+//   blue   "commits"      — a hash-link / Merkle commitment (no new signature)
+//   purple "cosigns"      — an independent witness signature over a log head
+//   green  "verify/pin"   — the consumer's checks
+//
+// Sources (byte-level): transparency protocol spec (2026-05-25), keystone spec
+// (2026-06-13), consumer-protocol spec (2026-06-14), signing.md, sigchain.md.
+digraph signature_tree_overview {
+    rankdir=TB;
+    labelloc="t";
+    fontname="Helvetica";
+    fontsize=20;
+    label="Boltzmann — the signature tree a registry maintains  (overview)\nred = signs · blue = commits (hash-link) · purple = cosigns · green = verify/pin";
+    bgcolor="white";
+    nodesep=0.5;
+    ranksep=0.8;
+    node [fontname="Helvetica", fontsize=11, style="filled"];
+    edge [fontname="Helvetica", fontsize=10, penwidth=1.4];
+
+    // ---- Layer A: root of trust (host identity) → see 05 --------------------
+    dns       [label="DNS TXT  _boltzmann.<host>\nv · root · sig · iat · exp\n⤷ detailed in 05", shape=note, fillcolor="#fde68a"];
+    hostchain [label="HOST SIGCHAIN  (append-only, hash-linked)\nInitHost (genesis) → RotateKey → …\nhost_root = blake3(genesis link)\n⤷ detailed in 05", shape=folder, fillcolor="#fef3c7"];
+    hostkey   [label="active host Ed25519 key\n(resolved from the chain at a timestamp)", shape=house, fillcolor="#fdba74"];
+
+    // ---- Layer B: per-package authority + content → see 06 ------------------
+    pkgchain  [label="PACKAGE SIGCHAIN  (one per package)\nCreate → Publish → Yank → …\nlink_hash = blake3(canonical link)\n⤷ detailed in 06", shape=folder, fillcolor="#fef08a"];
+    assertion [label="WebAuthn assertion\n(publisher passkey)", shape=house, fillcolor="#fdba74"];
+    content   [label="content_root  +  manifest_hash\n(file-tree Merkle over the .ent archive)\n⤷ detailed in 06", shape=octagon, fillcolor="#bbf7d0"];
+
+    // ---- Layer C: transparency substrate → see 07 --------------------------
+    smr       [label="SignedMapRoot (138 B)\nsparse Merkle map:\npackage_id → tip link_hash\n⤷ detailed in 07", shape=note, fillcolor="#e9d5ff"];
+    log       [label="map-root LOG  (RFC 6962, append-only)\nrevision = log_position + 1", shape=octagon, fillcolor="#c4b5fd"];
+    checkpoint[label="SignedLogCheckpoint (138 B)\nlog_size · log_root\n⤷ detailed in 07", shape=note, fillcolor="#e9d5ff"];
+
+    // ---- Layer D: witness regime + keystone → see 08 -----------------------
+    cosigs    [label="WITNESS COSIGNATURES\nindependent keys sign\nblake3(\"…/statement/v1\" ‖ id ‖ log_size ‖ log_root)\n⤷ detailed in 08", shape=note, fillcolor="#ddd6fe"];
+    keystone  [label="KEYSTONE root manifest\nnames witness set (M-of-N) + governance quorum\nM-of-N signature envelope\n⤷ detailed in 08", shape=note, fillcolor="#ddd6fe"];
+    consumer  [label="CONSUMER\npins keystone · verifies M-of-N\nratchets checkpoint (anti-rollback)", shape=box, style="rounded,filled", fillcolor="#bfdbfe", penwidth=2];
+
+    // ---- Trust edges --------------------------------------------------------
+    dns -> hostchain  [dir=both, color="#059669", label="binds dns_name ⇄ host_root"];
+    hostchain -> hostkey [color="#1d4ed8", label="derives"];
+
+    hostkey -> pkgchain   [color="#dc2626", label="signs each link"];
+    hostkey -> smr        [color="#dc2626", label="signs"];
+    hostkey -> checkpoint [color="#dc2626", label="signs"];
+
+    assertion -> pkgchain [color="#dc2626", style=dashed, label="co-signs Publish"];
+    pkgchain -> content   [color="#1d4ed8", label="Publish commits"];
+
+    pkgchain -> smr [color="#1d4ed8", label="tip is the map value"];
+    smr -> log         [color="#1d4ed8", label="appended"];
+    log -> checkpoint  [color="#1d4ed8", label="head"];
+
+    checkpoint -> cosigs [color="#7c3aed", label="cosigned by ≥ M witnesses"];
+    keystone -> cosigs   [color="#059669", style=dashed, label="defines the trusted set"];
+
+    keystone -> consumer   [color="#059669", label="pinned (shipped in binary)"];
+    cosigs -> consumer     [color="#059669", label="verify M-of-N"];
+    checkpoint -> consumer [color="#059669", style=dashed, label="ratchet"];
+    content -> consumer    [color="#059669", style=dashed, label="recompute & match"];
+
+    // ---- Rank hints to keep the layers stacked ------------------------------
+    { rank=same; dns; hostchain; }
+    { rank=same; pkgchain; assertion; }
+    { rank=same; smr; }
+    { rank=same; content; log; }
+    { rank=same; cosigs; keystone; }
+
+    // ---- Layer captions (left margin) ---------------------------------------
+    node [shape=plaintext, fillcolor="white", fontsize=12, fontcolor="#64748b"];
+    cA [label="A · root of trust\n(host identity)"];
+    cB [label="B · package authority\n+ content integrity"];
+    cC [label="C · transparency\nsubstrate"];
+    cD [label="D · witness regime\n+ keystone"];
+    cA -> cB -> cC -> cD [style=invis];
+    { rank=same; cA; hostchain; }
+    { rank=same; cB; pkgchain; }
+    { rank=same; cC; smr; }
+    { rank=same; cD; cosigs; }
+}

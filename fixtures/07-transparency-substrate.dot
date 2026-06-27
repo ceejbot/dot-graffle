@@ -1,0 +1,84 @@
+// 07 — Transparency substrate  (explodes layer C of diagram 04).
+// Two cryptographic layers: (1) a MUTABLE sparse Merkle map from package_id to
+// the package's current sigchain tip, and (2) an APPEND-ONLY RFC 6962 log of
+// signed map roots, summarized by signed log checkpoints. Together they make
+// registry equivocation detectable and mirror staleness rejectable.
+// Sources (byte-exact): 2026-05-25 transparency protocol spec §1–§4;
+// transparency.md; boltzmann-core::transparency; boltzmann-server cadence loop.
+digraph transparency_substrate {
+    rankdir=TB;
+    labelloc="t";
+    fontname="Helvetica";
+    fontsize=20;
+    label="Boltzmann — transparency substrate  (sparse Merkle map + RFC 6962 log)\nred = host signs · blue = hash/commit · all payloads are exactly 138 bytes";
+    bgcolor="white";
+    nodesep=0.45;
+    ranksep=0.75;
+    node [fontname="Helvetica", fontsize=10, style="filled"];
+    edge [fontname="Helvetica", fontsize=9, penwidth=1.3];
+
+    // ---- Layer 1: the sparse Merkle MAP ------------------------------------
+    subgraph cluster_map {
+        label="① sparse Merkle MAP   (mutable — leaves change as packages publish)";
+        style="rounded,filled"; fillcolor="#faf5ff"; color="#a855f7";
+
+        tipA [label="pkg A tip link_hash\n(from 06)", shape=box, fillcolor="#ede9fe"];
+        tipB [label="pkg B tip link_hash", shape=box, fillcolor="#ede9fe"];
+
+        keyA [label="map_key =\nblake3(\"…/map-key/v1:\" ‖ package_id)", shape=octagon, fillcolor="#ddd6fe", fontsize=9];
+
+        leafA [label="leaf = blake3(0x00 ‖ key ‖ value)\nvalue = tip link_hash", shape=octagon, fillcolor="#c4b5fd"];
+        leafB [label="leaf (pkg B)", shape=octagon, fillcolor="#c4b5fd"];
+        maproot [label="map_root\n(root over 256-bit keys,\nLSB-first bit decisions)", shape=octagon, fillcolor="#a78bfa", penwidth=2];
+
+        smtnote [label="internal = blake3(0x01 ‖ left ‖ right)\nempty leaf = blake3(\"…/smt/empty-leaf/v1\")\nempty map root = empty_subtree_hash(256)\nproofs: lookup (inclusion) + non-membership", shape=note, fillcolor="#f5f3ff", fontsize=9];
+
+        tipA -> keyA [style=dotted]; keyA -> leafA;
+        tipB -> leafB [style=dotted];
+        leafA -> maproot [color="#1d4ed8"]; leafB -> maproot [color="#1d4ed8"];
+        smtnote -> maproot [style=invis];
+    }
+
+    // ---- The SignedMapRoot (138 bytes) -------------------------------------
+    smr [label="SignedMapRootPayload  —  exactly 138 bytes  (type_tag 0x20)\l  0  algorithm (0x00 Ed25519)\l  1  type_tag = 0x20\l  2  host_root[32]\l 34  host_sigchain_seqno (u64)\l 42  host_sigchain_tip_hash[32]   ← binds to host identity (05)\l 74  map_root[32]\l106  size (u64)\l114  revision (u64) = log_position + 1\l122  timestamp_ms (u64)\l130  surface_version (u32)\l134  flags (u32, MUST be 0)\l", shape=note, fillcolor="#fef08a", fontsize=9];
+    hostkey [label="active host Ed25519 key\n(resolved @ timestamp_ms via host sigchain, 05)", shape=house, fillcolor="#fdba74"];
+    smrrec [label="SignedMapRootRecord =\npayload[138] ‖ HostSignatureWire\nsmr_record_hash = blake3(\"…/smr-record/v1\" ‖ record)", shape=note, fillcolor="#fde68a", fontsize=9];
+
+    maproot -> smr [color="#1d4ed8", label="committed @ offset 74"];
+    hostkey -> smr [color="#dc2626", label="signs the 138 bytes"];
+    smr -> smrrec [color="#1d4ed8"];
+
+    // ---- Layer 2: the append-only LOG --------------------------------------
+    subgraph cluster_log {
+        label="② append-only LOG of signed map roots   (RFC 6962 Merkle tree)";
+        style="rounded,filled"; fillcolor="#eef2ff"; color="#6366f1";
+
+        ll0 [label="log_leaf =\nblake3(0x10 ‖ SignedMapRootRecord)", shape=octagon, fillcolor="#c7d2fe"];
+        ll1 [label="log_leaf (revision r+1)", shape=octagon, fillcolor="#c7d2fe"];
+        logroot [label="log_root\nnode = blake3(0x11 ‖ left ‖ right)\nempty = blake3(\"…/log/empty/v1\")", shape=octagon, fillcolor="#818cf8", penwidth=2];
+        proofs [label="proofs:\ninclusion (was this root published?)\nconsistency (log only grew)", shape=note, fillcolor="#eef2ff", fontsize=9];
+
+        ll0 -> logroot [color="#1d4ed8"]; ll1 -> logroot [color="#1d4ed8"];
+        proofs -> logroot [style=invis];
+    }
+    smrrec -> ll0 [color="#1d4ed8", label="appended as a log leaf"];
+
+    // ---- The SignedLogCheckpoint (138 bytes) -------------------------------
+    ckpt [label="SignedLogCheckpointPayload  —  exactly 138 bytes  (type_tag 0x21)\l  2  host_root[32]\l 34  host_sigchain_seqno · 42 tip_hash[32]\l 74  log_root[32]\l106  log_size (u64)\l114  max_root_revision = log_size\l122  timestamp_ms · 130 surface_version · 134 flags\l", shape=note, fillcolor="#fef08a", fontsize=9];
+    logroot -> ckpt [color="#1d4ed8", label="committed @ offset 74"];
+    hostkey -> ckpt [color="#dc2626", label="signs"];
+
+    // ---- Producer (server cadence loop) ------------------------------------
+    cadence [label="SERVER cadence loop\nclaim dirty generation → sign fresh root + checkpoint\n(or a quiet-period checkpoint at the same log head)\nMUST publish a checkpoint ≥ every MMD seconds\n→ bounds mirror staleness independent of write traffic", shape=box, style="rounded,filled", fillcolor="#fee2e2"];
+    cadence -> smr  [style=dotted, color="#64748b", label="produces"];
+    cadence -> ckpt [style=dotted, color="#64748b"];
+    cadence -> cadence [color="#b91c1c", label="loop (≤ MMD)", penwidth=1.6];
+
+    // ---- Consumer classification -------------------------------------------
+    client [label="STATELESS CLIENT VERIFIER\nclassify checkpoint vs pinned HostTransparencyState:\n• Conforming   • Initialization\n• Equivocating (divergent (log_size, log_root)) — outranks staleness\n• Stale (older than freshness bound)\nthen revision-RATCHET the pinned state (no rollback)", shape=box, style="rounded,filled", fillcolor="#bbf7d0", penwidth=2];
+    ckpt -> client [color="#059669"];
+
+    // ---- Forward pointer to witnesses --------------------------------------
+    toWitness [label="the checkpoint (log_size, log_root) is what witnesses cosign → see 08", shape=note, fillcolor="#ddd6fe", fontsize=9];
+    ckpt -> toWitness [color="#7c3aed", style=dashed, label="cosigned"];
+}

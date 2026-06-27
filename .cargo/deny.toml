@@ -1,0 +1,25 @@
+[advisories]
+version = 2
+yanked = "deny"
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+
+[licenses]
+version = 2
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    # Direct dependency: dot-parser 0.6.1.
+    "GPL-2.0-or-later",
+    "MIT",
+    "Parity-7.0.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

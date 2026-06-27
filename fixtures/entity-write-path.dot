@@ -1,0 +1,118 @@
+digraph entity_write_path {
+  rankdir=TB;
+  fontname="Helvetica";
+  node [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#f5f5f5"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  // ── Entry points ──
+  subgraph cluster_entry {
+    label="Entry Points";
+    style=dashed;
+    color="#999999";
+
+    bulk_insert [label="BulkInsertEntityRowsJob\n(claims ingest, bulk ops)", fillcolor="#dbeafe"];
+    bulk_update [label="BulkUpdateUpdatablePropJob\n(property updates)", fillcolor="#dbeafe"];
+    single_cache [label="EntityPropertySingleCacheJob\n(single property)", fillcolor="#dbeafe"];
+    system_job [label="SparkJobSubmissionService\n(Airflow / system jobs)", fillcolor="#e0e7ff"];
+    api [label="EntityProjectSubService\n(API calls)", fillcolor="#e0e7ff"];
+  }
+
+  // ── Routing ──
+  api -> system_job [label="submits\nsystem job"];
+  system_job -> bulk_insert [label="cacheNow"];
+  system_job -> bulk_update [label="bulkUpdateProp"];
+  system_job -> single_cache [label="entitySingleCache"];
+
+  // ── H2DB options construction ──
+  h2_gate [label="pe.cacheInH2Db?\n(cachelocation==\"h2db\")", shape=diamond, fillcolor="#fef3c7"];
+  bulk_insert -> h2_gate;
+  h2_gate -> h2opts_build [label="true"];
+  h2_gate -> h2opts_null [label="false"];
+
+  h2opts_build [label="H2DbOptions(\n  numShards,\n  indexNumShards,\n  partCol, indices\n)", fillcolor="#fef9c3"];
+  h2opts_null [label="h2dbOptions = null", fillcolor="#f5f5f5"];
+
+  // ── Helper construction ──
+  helper [label="EntityPropertyCacheHelper\n(spark, entity, h2dbOptions, ...)", fillcolor="#ddd6fe"];
+  h2opts_build -> helper;
+  h2opts_null -> helper;
+  bulk_update -> helper [label="h2dbOptions\nalways null"];
+
+  process [label="helper.process(df, keyCol, propInfos, epis)", fillcolor="#ddd6fe"];
+  helper -> process;
+
+  // ── Central decision ──
+  cb_check [label="pe.cacheInCouchBase?\ncachelocation == null || \"cb\"", shape=diamond, fillcolor="#fef3c7"];
+  process -> cb_check;
+
+  // ── Couchbase path ──
+  cb_write [label="CouchbaseEntitySaveUtil\n.saveEntity()", fillcolor="#fed7aa"];
+  cb_check -> cb_write [label="true"];
+
+  couchbase [label="Couchbase\nK/V Store", shape=cylinder, fillcolor="#fdba74"];
+  cb_write -> couchbase;
+
+  // ── Non-Couchbase path ──
+  pg_check [label="pe.cacheInShardedpg?\ncachelocation == \"shardedpg\"", shape=diamond, fillcolor="#fef3c7"];
+  cb_check -> pg_check [label="false\n(shardedpg or h2db)"];
+
+  // ── ShardedPg (Citus) path ──
+  pg_enabled [label="ShardedPostgresSession\n.enabled?", shape=diamond, fillcolor="#fef3c7"];
+  pg_check -> pg_enabled [label="true"];
+  pg_enabled -> pg_error [label="false"];
+  pg_error [label="THROW\n\"postgres server\nnot set up\"", fillcolor="#fecaca", shape=octagon];
+
+  full_check [label="fullUpdate?", shape=diamond, fillcolor="#fef3c7"];
+  pg_enabled -> full_check [label="true"];
+
+  pg_full [label="updateShardedpgFully()\n(temp column swap)", fillcolor="#bbf7d0"];
+  pg_incr [label="updateShardedpgIncrementally()\n(direct upsert)", fillcolor="#bbf7d0"];
+  full_check -> pg_full [label="true"];
+  full_check -> pg_incr [label="false"];
+
+  pg_session [label="ShardedPostgresSession\n.maybeAddEntityProperty()\n.getConnection(pe.fClaimsDb)", fillcolor="#bbf7d0"];
+  pg_full -> pg_session;
+  pg_incr -> pg_session;
+
+  pg_df_util [label="ShardedpgDataFrameUtil\n.saveEntityProperty(df, pe)", fillcolor="#bbf7d0"];
+  pg_session -> pg_df_util;
+
+  citus_route [label="pe.fClaimsDb\nroutes to cluster", shape=diamond, fillcolor="#fef3c7"];
+  pg_df_util -> citus_route;
+
+  citus_entity [label="Entity Citus\n(shardedpg_url)\nfClaimsDb=0", shape=cylinder, fillcolor="#86efac"];
+  citus_claims [label="Claims Citus\n(claims_shardedpg_url)\nfClaimsDb=1", shape=cylinder, fillcolor="#86efac"];
+  citus_custom [label="Customer Citus\n(claims_shardedpg_url_N)\nfClaimsDb>=2", shape=cylinder, fillcolor="#86efac"];
+  citus_route -> citus_entity [label="0"];
+  citus_route -> citus_claims [label="1"];
+  citus_route -> citus_custom [label="2+"];
+
+  // ── H2DB path ──
+  h2_require [label="Require(pe.cacheInH2Db)\nRequire(k8sGroup.nonEmpty)", fillcolor="#bfdbfe"];
+  pg_check -> h2_require [label="false\n(must be h2db)"];
+
+  h2_write [label="Shardedh2Util\n.saveEntityToDb(\n  df, pe, h2dbOptions,\n  k8sGroup, extraFields\n)", fillcolor="#bfdbfe"];
+  h2_require -> h2_write;
+
+  h2_local [label="Spark executors:\nwrite local .mv.db files\n(H2 embedded JDBC)", fillcolor="#93c5fd"];
+  h2_write -> h2_local;
+
+  s3 [label="S3\n(k8sGroup.cloudDir)", shape=cylinder, fillcolor="#60a5fa"];
+  h2_local -> s3 [label="upload"];
+
+  h2_pods [label="H2DB Server Pods\n(K8s StatefulSet)", shape=box3d, fillcolor="#3b82f6", fontcolor="white"];
+  s3 -> h2_pods [label="download\n& serve", style=dashed];
+
+  // ── Single cache path (Citus only) ──
+  single_pg [label="ShardedPostgresSession\n.updateListOfEntityProperties()", fillcolor="#bbf7d0"];
+  single_cache -> single_pg;
+  single_pg -> citus_route;
+
+  // ── Return values ──
+  ret_true [label="return true\n(wrote to shardedpg)", shape=plaintext, fontsize=8];
+  ret_false_h2 [label="return false\n(wrote to h2db)", shape=plaintext, fontsize=8];
+  ret_false_cb [label="return false\n(wrote to couchbase)", shape=plaintext, fontsize=8];
+  pg_df_util -> ret_true [style=dotted];
+  h2_write -> ret_false_h2 [style=dotted];
+  cb_write -> ret_false_cb [style=dotted];
+}

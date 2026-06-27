@@ -1,0 +1,90 @@
+// 02 — Publish / pack pipeline: end-to-end data flow when an author publishes.
+// Read left to right. The publish API is two-phase (initiate → ceremony →
+// confirm) so a fresh WebAuthn assertion is bound into the signed sigchain link.
+// Sources: signing.md, identity.md, sigchain.md, archive-format.md,
+// transparency.md (§ cadence), api.md.
+digraph boltzmann_publish {
+    rankdir=LR;
+    labelloc="t";
+    fontname="Helvetica";
+    fontsize=20;
+    label="Boltzmann — publish / pack pipeline\nred = signing · blue = hash/commit · gray = data flow";
+    bgcolor="white";
+    nodesep=0.35;
+    ranksep=0.7;
+    node [fontname="Helvetica", fontsize=10, style="filled", shape=box, fillcolor="#dbeafe"];
+    edge [fontname="Helvetica", fontsize=9, color="#475569"];
+
+    // ---- Local: pack (boltzmann CLI) ----------------------------------------
+    subgraph cluster_pack {
+        label="① boltzmann pack  (local, in the CLI)";
+        style="rounded,filled"; fillcolor="#eff6ff"; color="#60a5fa";
+        toml    [label="boltzmann.toml\n[package.include] patterns", shape=note, fillcolor="#fef9c3"];
+        gather  [label="gather files\ntext-only · no dotfiles\nno install scripts"];
+        hashf   [label="BLAKE3 each file\n→ content_hash", shape=octagon, fillcolor="#bbf7d0"];
+        sortf   [label="sort by path\n(lexicographic)"];
+        merkle  [label="file-tree Merkle\nleaf 0x00·node 0x01\n→ content_root", shape=octagon, fillcolor="#bbf7d0"];
+        mh      [label="manifest_hash =\nblake3(manifest bytes)", shape=octagon, fillcolor="#bbf7d0"];
+        ent     [label=".ent archive\nmagic · manifest(JSON)\n· zstd file stream", shape=note, fillcolor="#fef9c3"];
+        toml -> gather -> hashf -> sortf -> merkle;
+        merkle -> ent [color="#1d4ed8", label="content_root"];
+        mh -> ent [color="#1d4ed8"];
+        gather -> mh [style=dotted];
+    }
+
+    // ---- Server: initiate ---------------------------------------------------
+    subgraph cluster_initiate {
+        label="② POST initiate_publish  (server; needs session < 15 min)";
+        style="rounded,filled"; fillcolor="#ecfdf5"; color="#34d399";
+        validate [label="validate manifest\nunpack · UTF-8 check\nstore files content-addressed", fillcolor="#a7f3d0"];
+        recheck  [label="recompute content_root\n& manifest_hash — must match", fillcolor="#a7f3d0"];
+        pending  [label="create PendingAction\n(TTL 120 s) + challenge", fillcolor="#a7f3d0"];
+        validate -> recheck -> pending;
+    }
+
+    // ---- Ceremony -----------------------------------------------------------
+    subgraph cluster_ceremony {
+        label="③ WebAuthn ceremony  (publisher's passkey)";
+        style="rounded,filled"; fillcolor="#fff7ed"; color="#fb923c";
+        chal   [label="challenge =\nblake3(canonical link data)", shape=octagon, fillcolor="#fed7aa"];
+        sign   [label="passkey signs challenge\n→ WebAuthn assertion", shape=house, fillcolor="#fdba74"];
+        chal -> sign [color="#dc2626"];
+    }
+
+    // ---- Server: confirm ----------------------------------------------------
+    subgraph cluster_confirm {
+        label="④ POST confirm_publish  (server; one DB transaction)";
+        style="rounded,filled"; fillcolor="#ecfdf5"; color="#34d399";
+        gates  [label="gates: PendingAction valid\n+ assertion valid\n(origin · challenge · sig)", fillcolor="#a7f3d0"];
+        link   [label="append Publish sigchain link\nseqno · prev · content_root\nmanifest_hash · assertion", shape=note, fillcolor="#fef08a"];
+        hostsig[label="host Ed25519 signs\ncanonical link bytes\n→ link_hash", shape=house, fillcolor="#fdba74"];
+        diff   [label="compute diff\nvs previous content_root", fillcolor="#a7f3d0"];
+        dirty  [label="mark map leaf dirty\n+ transparency trigger", fillcolor="#a7f3d0"];
+        gates -> link;
+        link -> hostsig [color="#dc2626", label="sign"];
+        link -> diff [style=dotted];
+        hostsig -> dirty;
+    }
+
+    // ---- Async: transparency + witnessing -----------------------------------
+    subgraph cluster_transparency {
+        label="⑤ transparency cadence loop  (async)";
+        style="rounded,filled"; fillcolor="#f5f3ff"; color="#a78bfa";
+        claim  [label="claim dirty generation", fillcolor="#ddd6fe"];
+        smr    [label="sign SignedMapRoot (138 B)\n+ SignedLogCheckpoint", shape=note, fillcolor="#fef08a"];
+        log    [label="append to RFC 6962 log\nrevision = log_position + 1", shape=octagon, fillcolor="#c4b5fd"];
+        claim -> smr [color="#dc2626", label="host signs"];
+        smr -> log [color="#1d4ed8"];
+    }
+    cosign [label="⑥ witnesses observe + cosign\nthe checkpoint (W-C / W-D)", shape=note, fillcolor="#ddd6fe"];
+
+    // ---- Spine across phases ------------------------------------------------
+    ent     -> validate [label="upload .ent", penwidth=2];
+    pending -> chal      [label="202 + challenge", penwidth=2];
+    sign    -> gates     [label="assertion", color="#dc2626", penwidth=2];
+    dirty   -> claim     [label="201 Created\n(then async)", style=dashed, penwidth=2];
+    log     -> cosign    [color="#7c3aed", penwidth=2];
+
+    // diff feeds back as the consumer-visible review surface
+    diff -> ent [style=invis];
+}
