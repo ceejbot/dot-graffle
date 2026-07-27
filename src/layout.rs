@@ -32,7 +32,8 @@ pub(crate) struct Cluster {
     pub(crate) fill: Option<String>,
     pub(crate) pen: Option<String>,
     pub(crate) font_name: Option<String>,
-    pub(crate) font_size: Option<String>,
+    /// Label font size in points, parsed here at the graphviz boundary.
+    pub(crate) font_size: Option<f64>,
     pub(crate) font_color: Option<String>,
 }
 
@@ -44,7 +45,8 @@ pub(crate) struct FloatingLabel {
     pub(crate) b: NodeBox,
     pub(crate) text: String,
     pub(crate) font_name: Option<String>,
-    pub(crate) font_size: Option<String>,
+    /// Label font size in points, parsed here at the graphviz boundary.
+    pub(crate) font_size: Option<f64>,
     pub(crate) font_color: Option<String>,
 }
 
@@ -76,11 +78,12 @@ pub(crate) struct Layout {
     pub(crate) clusters: Vec<Cluster>,
     pub(crate) labels: Vec<FloatingLabel>,
     pub(crate) node_labels: HashMap<String, NodeLabel>,
-    /// Routed edge splines, keyed by `(tail_name, head_name)`: on-curve
-    /// waypoints in OmniGraffle coords, sampled from graphviz's bezier.
-    /// Parallel edges between the same pair collapse to one entry (last
-    /// wins).
-    pub(crate) edges: HashMap<EdgeKey, Polyline>,
+    /// Routed edge splines, keyed by tail node name then head node name (two
+    /// levels so callers can look up by `&str` without building an owned
+    /// key): on-curve waypoints in OmniGraffle coords, sampled from
+    /// graphviz's bezier. Parallel edges between the same pair collapse to
+    /// one entry (last wins).
+    pub(crate) edges: HashMap<String, HashMap<String, Polyline>>,
 }
 
 const PT_PER_INCH: f64 = 72.0;
@@ -219,7 +222,7 @@ fn parse_json(d: &Json) -> Layout {
                 fill: string_attr(o, "fillcolor"),
                 pen: string_attr(o, "color"),
                 font_name: string_attr(o, "fontname"),
-                font_size: string_attr(o, "fontsize"),
+                font_size: str_f64(o.get("fontsize")),
                 font_color: string_attr(o, "fontcolor"),
             });
         }
@@ -237,13 +240,13 @@ fn parse_json(d: &Json) -> Layout {
                 .collect()
         })
         .unwrap_or_default();
-    let mut edges = HashMap::new();
+    let mut edges: HashMap<String, HashMap<String, Polyline>> = HashMap::new();
     for e in d.get("edges").and_then(Json::as_array).into_iter().flatten() {
         for (text_key, pos_key) in [("xlabel", "xlp"), ("headlabel", "head_lp"), ("taillabel", "tail_lp")] {
             labels.extend(external_label(e, text_key, pos_key, height));
         }
-        if let Some((ends, points)) = edge_spline(e, &names_by_index, height) {
-            edges.insert(ends, points);
+        if let Some(((tail, head), points)) = edge_spline(e, &names_by_index, height) {
+            edges.entry(tail).or_default().insert(head, points);
         }
     }
 
@@ -347,7 +350,7 @@ fn parse_graph_label(d: &Json, height: f64) -> Option<FloatingLabel> {
         },
         text,
         font_name: string_attr(d, "fontname"),
-        font_size: string_attr(d, "fontsize"),
+        font_size: str_f64(d.get("fontsize")),
         font_color: string_attr(d, "fontcolor"),
     })
 }
@@ -376,7 +379,7 @@ fn external_label(o: &Json, text_key: &str, pos_key: &str, height: f64) -> Optio
         },
         text,
         font_name: string_attr(o, "fontname"),
-        font_size: string_attr(o, "fontsize"),
+        font_size: str_f64(o.get("fontsize")),
         font_color: string_attr(o, "fontcolor"),
     })
 }
@@ -498,7 +501,7 @@ fn html_text_labels(o: &Json, height: f64) -> Vec<FloatingLabel> {
                 },
                 text: r.text,
                 font_name: r.face,
-                font_size: Some(r.size.to_string()),
+                font_size: Some(r.size),
                 font_color: r.color,
             }
         })
@@ -666,7 +669,8 @@ mod tests {
         let layout = parse_json(&d);
         let spline = layout
             .edges
-            .get(&("a".to_string(), "b".to_string()))
+            .get("a")
+            .and_then(|by_head| by_head.get("b"))
             .expect("a->b spline");
         // One cubic segment -> 1 + 8 sampled waypoints, more than a straight pair.
         assert!(spline.len() > 2, "got {} points", spline.len());

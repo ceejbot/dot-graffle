@@ -232,7 +232,9 @@ impl<'a> Builder<'a> {
             };
             // graphviz's routed spline if we have it; otherwise a straight line
             // between node centers (no layout, or an edge dot didn't route).
-            let spline = layout.and_then(|l| l.edges.get(&(edge.from.clone(), edge.to.clone())));
+            let spline = layout
+                .and_then(|l| l.edges.get(edge.from.as_str()))
+                .and_then(|by_head| by_head.get(edge.to.as_str()));
             let points = spline.cloned().unwrap_or_else(|| vec![(tx, ty), (hx, hy)]);
             self.graphics
                 .push(line_graphic(id, tail_id, head_id, &points, label, &viz));
@@ -294,20 +296,20 @@ fn grid_box(i: usize) -> NodeBox {
 
 // ---- plist builders --------------------------------------------------------
 
-/// Resolve a label font from optional name/size/color attribute strings,
+/// Resolve a label font from optional name/size/color attribute values,
 /// falling back to the project defaults. Shared by the cluster and graph-label
 /// builders, which carry the same font triple.
-fn label_font<'a>(name: Option<&'a str>, size: Option<&str>, color: Option<&'a str>) -> FontViz<'a> {
+fn label_font<'a>(name: Option<&'a str>, size: Option<f64>, color: Option<&'a str>) -> FontViz<'a> {
     FontViz {
         name: name.unwrap_or(DEFAULT_FONT),
-        size: size.and_then(|s| s.parse().ok()).unwrap_or(DEFAULT_FONT_SIZE),
+        size: size.unwrap_or(DEFAULT_FONT_SIZE),
         color,
     }
 }
 
 /// A cluster's background rectangle. Drawn before nodes so it sits behind them.
 fn cluster_graphic(id: i64, c: &Cluster) -> Value {
-    let font = label_font(c.font_name.as_deref(), c.font_size.as_deref(), c.font_color.as_deref());
+    let font = label_font(c.font_name.as_deref(), c.font_size, c.font_color.as_deref());
 
     let mut g = Dictionary::new();
     g.insert("Class".into(), Value::String("ShapedGraphic".into()));
@@ -336,11 +338,7 @@ fn cluster_graphic(id: i64, c: &Cluster) -> Value {
 /// text-only graphic placed where graphviz positioned it — no fill or border,
 /// like a `plaintext` node.
 fn floating_label_graphic(id: i64, lbl: &FloatingLabel) -> Value {
-    let font = label_font(
-        lbl.font_name.as_deref(),
-        lbl.font_size.as_deref(),
-        lbl.font_color.as_deref(),
-    );
+    let font = label_font(lbl.font_name.as_deref(), lbl.font_size, lbl.font_color.as_deref());
 
     let mut g = Dictionary::new();
     g.insert("Class".into(), Value::String("ShapedGraphic".into()));

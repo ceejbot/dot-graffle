@@ -13,7 +13,7 @@ brew install ceejbot/tap/dot-graffle graphviz
 cargo install dot-graffle
 ```
 
-You want `graphviz` available to go from `dot` to `graffle`. The tool shells out to to graphviz for layout while converting. Without it the nodes land on a plain grid and clusters are dropped.
+You want `graphviz` available to go from `dot` to `graffle`. The tool shells out to graphviz for layout while converting. Without it the nodes land on a plain grid and clusters are dropped.
 
 ## Usage
 

@@ -28,7 +28,7 @@ use crate::error::DotGraffleError;
 use crate::graffle::GraffleData;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
+pub(crate) enum Direction {
     /// dot -> graffle (invoked as `dot-graffle`)
     DotToGraffle,
     /// graffle -> dot (invoked as `graffle-dot`)
@@ -131,7 +131,7 @@ fn starts_with_dot_keyword(s: &str) -> bool {
 #[clap(version, styles = v3_styles(), max_term_width = 100)]
 #[command(next_line_help = true)]
 /// Convert graphviz .dot files to OmniGraffle diagrams and back.
-pub struct Args {
+pub(crate) struct Args {
     /// Input files to convert. Each `.dot` is written out as a sibling
     /// `.graffle`, and each `.graffle` as a sibling `.dot`. With no files,
     /// reads stdin and writes stdout — the direction is inferred from the input
